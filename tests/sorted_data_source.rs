@@ -438,6 +438,62 @@ mod tests {
         Ok(())
     }
 
+    // Each union input runs in its own task, where the other input is an EmptyExec placeholder
+    // that must not hide the ordering both inputs share.
+    #[tokio::test]
+    async fn sorted_csv_aggregation_over_isolated_union() -> Result<()> {
+        let (plan, result) = CsvTest::new(SORTED_CSV)
+            .query(
+                "SELECT value, count(*) AS n FROM \
+                 (SELECT value FROM records UNION ALL SELECT value FROM records) \
+                 GROUP BY value ORDER BY value",
+            )
+            .await?;
+        assert_snapshot!(plan, @r"
+        ┌───── DistributedExec
+        │ SortPreservingMergeExec: [value@0 ASC NULLS LAST]
+        │   [Stage 2] => NetworkCoalesceExec: output_partitions=4, input_tasks=2
+        └──────────────────────────────────────────────────
+          ┌───── Stage 2 ── tasks=2, partitions=2
+          │ ProjectionExec: expr=[value@0 as value, count(Int64(1))@1 as n]
+          │   AggregateExec: mode=FinalPartitioned, gby=[value@0 as value], aggr=[count(Int64(1))], ordering_mode=Sorted
+          │     [Stage 1] => NetworkShuffleExec: output_partitions=2, input_tasks=2, sort_exprs=[value@0 ASC NULLS LAST]
+          └──────────────────────────────────────────────────
+            ┌───── Stage 1 ── tasks=2, partitions=4
+            │ RepartitionExec: partitioning=Hash([value@0], 4), input_partitions=2, preserve_order=true, sort_exprs=value@0 ASC NULLS LAST
+            │   AggregateExec: mode=Partial, gby=[value@0 as value], aggr=[count(Int64(1))], ordering_mode=Sorted
+            │     DistributedUnionExec: t0:[c0] t1:[c1]
+            │       DistributedLeafExec:
+            │         t0: DataSourceExec: file_groups={2 groups: [[testdata/sorted_csv/0.csv:<int>..<int>], [testdata/sorted_csv/1.csv:<int>..<int>]]}, projection=[value], output_ordering=[value@0 ASC NULLS LAST], file_type=csv, has_header=true
+            │       DistributedLeafExec:
+            │         t0: DataSourceExec: file_groups={2 groups: [[testdata/sorted_csv/0.csv:<int>..<int>], [testdata/sorted_csv/1.csv:<int>..<int>]]}, projection=[value], output_ordering=[value@0 ASC NULLS LAST], file_type=csv, has_header=true
+            └──────────────────────────────────────────────────
+        ");
+        assert_snapshot!(result, @r"
+        +-------+---+
+        | value | n |
+        +-------+---+
+        | 0     | 4 |
+        | 1     | 4 |
+        | 2     | 4 |
+        | 3     | 4 |
+        | 4     | 4 |
+        | 5     | 4 |
+        | 6     | 4 |
+        | 7     | 4 |
+        | 8     | 4 |
+        | 9     | 4 |
+        | 10    | 4 |
+        | 11    | 4 |
+        | 12    | 4 |
+        | 13    | 4 |
+        | 14    | 4 |
+        | 15    | 4 |
+        +-------+---+
+        ");
+        Ok(())
+    }
+
     struct CsvTest<'a> {
         bodies: &'a [&'a str],
         newlines_in_values: bool,

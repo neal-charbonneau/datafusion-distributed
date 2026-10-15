@@ -177,16 +177,8 @@ impl ChildrenIsolatorUnionExec {
             );
         };
 
-        // It's not supper efficient to build a UnionExec just to get the properties out, but the
-        // other solution is to copy-paste a bunch of code from upstream for computing the properties
-        // of a union, so we prefer to just reuse it like this.
-        let mut properties = UnionExec::try_new(children.clone())?
-            .properties()
-            .as_ref()
-            .clone();
-        properties.partitioning = Partitioning::UnknownPartitioning(*partition_count);
         Ok(Self {
-            properties: Arc::new(properties),
+            properties: Arc::new(union_properties(&children, *partition_count)?),
             metrics: ExecutionPlanMetricsSet::default(),
             children,
             child_weights: weights,
@@ -235,6 +227,41 @@ impl ChildrenIsolatorUnionExec {
             task_idx_map: self.task_idx_map.clone(),
         }
     }
+}
+
+/// The properties of a [ChildrenIsolatorUnionExec] over `children` advertising `partition_count`
+/// partitions.
+///
+/// [EmptyExec] children produce no rows, so they don't weaken the orderings and constants the
+/// other children share. This matters on workers, where the children a task doesn't run are
+/// [EmptyExec] placeholders (see [ChildrenIsolatorUnionExec::to_task_specialized]): nodes above
+/// the union are rebuilt from its properties there, so they must be as strong as the ones the stage
+/// was planned with.
+pub(crate) fn union_properties(
+    children: &[Arc<dyn ExecutionPlan>],
+    partition_count: usize,
+) -> Result<PlanProperties, DataFusionError> {
+    // It's not supper efficient to build a UnionExec just to get the properties out, but the
+    // other solution is to copy-paste a bunch of code from upstream for computing the properties
+    // of a union, so we prefer to just reuse it like this.
+    let mut properties = UnionExec::try_new(children.to_vec())?
+        .properties()
+        .as_ref()
+        .clone();
+    let producing = children
+        .iter()
+        .filter(|child| !child.is::<EmptyExec>())
+        .cloned()
+        .collect_vec();
+    if !producing.is_empty() && producing.len() < children.len() {
+        let schema = Arc::clone(properties.eq_properties.schema());
+        properties.eq_properties = UnionExec::try_new(producing)?
+            .equivalence_properties()
+            .clone()
+            .with_new_schema(schema)?;
+    }
+    properties.partitioning = Partitioning::UnknownPartitioning(partition_count);
+    Ok(properties)
 }
 
 impl DisplayAs for ChildrenIsolatorUnionExec {

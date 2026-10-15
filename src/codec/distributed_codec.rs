@@ -2,7 +2,7 @@ use super::get_distributed_user_codecs;
 use crate::common::{deserialize_uuid, require_one_child, serialize_uuid};
 use crate::execution_plans::{
     BroadcastExec, ChildWeight, ChildrenIsolatorUnionExec, NetworkBroadcastExec,
-    NetworkCoalesceExec, SamplerExec,
+    NetworkCoalesceExec, SamplerExec, union_properties,
 };
 use crate::execution_plans::{NetworkShuffleExec, ShuffleMode};
 use crate::stage::{LocalStage, RemoteStage, Stage};
@@ -17,7 +17,6 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PlanProperties};
 use datafusion::prelude::SessionConfig;
 use datafusion_proto::physical_plan::from_proto::{
@@ -272,17 +271,7 @@ impl PhysicalExtensionCodec for DistributedCodec {
                 task_idx_map,
                 child_weights,
             }) => {
-                // Building a UnionExec just to get the properties out of it is not the most
-                // efficient thing to do. However, it's the easiest way of getting the properties
-                // for the ChildrenIsolatorUnionExec without copy-pasting in this project
-                // all the machinery that builds them for UnionExec.
-                let mut properties = UnionExec::try_new(inputs.to_vec())?
-                    .properties()
-                    .as_ref()
-                    .clone();
-                properties.partitioning =
-                    Partitioning::UnknownPartitioning(partition_count as usize);
-
+                let properties = union_properties(inputs, partition_count as usize)?;
                 Ok(Arc::new(ChildrenIsolatorUnionExec {
                     properties: Arc::new(properties),
                     metrics: Default::default(),

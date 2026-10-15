@@ -12,8 +12,8 @@ mod sampler;
 pub mod benchmarks;
 
 pub use broadcast::BroadcastExec;
-pub(crate) use children_isolator_union::ChildWeight;
 pub use children_isolator_union::ChildrenIsolatorUnionExec;
+pub(crate) use children_isolator_union::{ChildWeight, union_properties};
 pub use distributed_leaf::DistributedLeafExec;
 pub(crate) use metrics::MetricsWrapperExec;
 pub use network_broadcast::NetworkBroadcastExec;
